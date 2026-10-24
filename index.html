@@ -323,8 +323,12 @@ require([
   // stay out of All items, Not filed yet and search unless "Show hidden" is ticked.
   // Offline map packages are the SQLite/tile packages Field Maps makes for offline map areas. They
   // look like clutter but the offline areas need them, so they're kept apart from Backups.
+  // Type folders come before Backups, so a notebook that makes backups (say, "Nightly backup")
+  // goes to Notebooks rather than being hidden as one.
   const AUTO_FOLDERS = [
     { title: "Service definitions", test: i => i.type === "Service Definition" },
+    { title: "Map areas", test: i => i.type === "Map Area" },
+    { title: "Notebooks", test: i => i.type === "Notebook" },
     { title: "Offline map packages", test: i => (i.typeKeywords || []).includes("MapAreaPackage"), hidden: true },
     { title: "Backups", test: isBackup, hidden: true }
   ];
