@@ -129,7 +129,7 @@ dialog .preview li{ margin:2px 0; }
       <input type="search" id="q" placeholder="Search titles, owners, tags…">
       <select id="typeFilter"><option value="">All types</option></select>
       <select id="ownerFilter"><option value="">All owners</option></select>
-      <label class="sub" title="Backups are hidden everywhere except their own folder"><input type="checkbox" id="showBackups"> Show backups</label>
+      <label class="sub" title="Backups and offline map packages are hidden everywhere except their own folders"><input type="checkbox" id="showBackups"> Show hidden</label>
     </div>
     <div class="crumb" id="crumb"></div>
     <div class="selbar" id="selbar">
@@ -304,7 +304,7 @@ require([
     fileNewBackups();
   }
 
-  // ---------- Backups ----------
+  // ---------- Automatic folders ----------
 
   // Backups are the nightly backup_<id>_<date> exports, *_TEMP_FOR_BACKUP_* files and similar,
   // downloadable files sitting in an owner's Backup(s) folder, and file geodatabases with the same
@@ -315,12 +315,23 @@ require([
   const LAYER_TYPES = ["Feature Service", "Map Service", "Vector Tile Service", "Scene Service", "Image Service"];
   // "TMTCRM_gdb" and "TMT CRM" count as the same name.
   const sameName = s => s.toLowerCase().replace(/[_\s-]*f?gdb$/, "").replace(/[^a-z0-9]/g, "");
-  const backupsPath = () => `/${S.schema[0]?.title}/Backups`;
   const isBackup = i => BACKUP_RE.test(i.title) || (i.tags || []).some(t => BACKUP_RE.test(t))
     || (FILE_TYPES.includes(i.type) && BACKUP_RE.test(S.folderNames.get(i.owner)?.get(i.ownerFolder) || ""))
     || (i.type === "File Geodatabase" && S.layerNames?.has(sameName(i.title)));
-  const hiddenBackup = id => !$("showBackups").checked && folderOf(id).includes(backupsPath())
-    && S.folder !== backupsPath() && !S.folder.startsWith(backupsPath() + "/");
+
+  // Top-level folders the organiser fills itself; the first rule an item matches wins. Hidden ones
+  // stay out of All items, Not filed yet and search unless "Show hidden" is ticked.
+  // Offline map packages are the SQLite/tile packages Field Maps makes for offline map areas. They
+  // look like clutter but the offline areas need them, so they're kept apart from Backups.
+  const AUTO_FOLDERS = [
+    { title: "Service definitions", test: i => i.type === "Service Definition" },
+    { title: "Offline map packages", test: i => (i.typeKeywords || []).includes("MapAreaPackage"), hidden: true },
+    { title: "Backups", test: isBackup, hidden: true }
+  ];
+  const autoPath = f => `/${S.schema[0]?.title}/${f.title}`;
+  const hiddenPaths = () => AUTO_FOLDERS.filter(f => f.hidden).map(autoPath);
+  const hiddenBackup = id => !$("showBackups").checked && hiddenPaths().some(p =>
+    folderOf(id).includes(p) && S.folder !== p && !S.folder.startsWith(p + "/"));
 
   async function loadFolderNames(){
     const owners = [...new Set([...S.items.values()].map(i => i.owner))].filter(o => !S.folderNames.has(o));
@@ -332,27 +343,37 @@ require([
     }));
   }
 
-  // Files any backups that aren't in a folder yet into Backups (making the folder if needed),
-  // so new nightly exports never pile up in "Not filed yet".
+  // Files items into the automatic folders (making them if needed), so new nightly exports, offline
+  // packages and service definitions never pile up in "Not filed yet". Items someone filed by hand are
+  // left alone; an item only in an automatic folder is moved if a higher rule now matches it.
   async function fileNewBackups(){
     if(!S.canFile || !S.schema.length) return;
     try {
       await loadFolderNames();
       S.layerNames = new Set([...S.items.values()].filter(i => LAYER_TYPES.includes(i.type)).map(i => sameName(i.title)));
-      const ids = [...S.items.values()].filter(i => !isFiled(i.id) && isBackup(i)).map(i => i.id);
-      if(!ids.length) return;
-      const path = backupsPath();
+      const autoPaths = AUTO_FOLDERS.map(autoPath);
+      const moves = new Map(), counts = {};
+      for(const i of S.items.values()){
+        const cur = folderOf(i.id);
+        if(cur.some(p => !autoPaths.includes(p))) continue;
+        const rule = AUTO_FOLDERS.find(f => f.test(i));
+        if(!rule || (cur.length === 1 && cur[0] === autoPath(rule))) continue;
+        moves.set(i.id, [autoPath(rule)]);
+        counts[rule.title] = (counts[rule.title] || 0) + 1;
+      }
+      if(!moves.size) return;
       await saveMap({
-        files: new Map(ids.map(id => [id, [path]])),
+        files: moves,
         edit: ({ schema }) => {
           const s = structuredClone(schema);
-          if(!(s[0].categories ||= []).some(n => n.title === "Backups")) s[0].categories.push({ title: "Backups" });
+          const top = s[0].categories ||= [];
+          for(const f of AUTO_FOLDERS) if(!top.some(n => n.title === f.title)) top.push({ title: f.title });
           return s;
         }
       });
       render();
-      status(`Filed ${ids.length} backup${ids.length === 1 ? "" : "s"} into Backups.`, 3000);
-    } catch(e){ console.warn("Couldn't file backups", e); }
+      status("Filed " + Object.entries(counts).map(([t, n]) => `${n} into ${t}`).join(", ") + ".", 4000);
+    } catch(e){ console.warn("Couldn't file into automatic folders", e); }
   }
 
   // The folder map is one item holding { schema, files: { itemId: [paths] } }, shared with the org so
