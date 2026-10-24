@@ -306,14 +306,19 @@ require([
 
   // ---------- Backups ----------
 
-  // Backups are the nightly backup_<id>_<date> exports, *_TEMP_FOR_BACKUP_* files and similar, plus
-  // downloadable files sitting in an owner's Backup(s) folder. Live layers, forms and maps that happen
-  // to be in a Backups folder are not backups.
+  // Backups are the nightly backup_<id>_<date> exports, *_TEMP_FOR_BACKUP_* files and similar,
+  // downloadable files sitting in an owner's Backup(s) folder, and file geodatabases with the same
+  // name as a layer (copies or the original upload it was published from). Live layers, forms and
+  // maps that happen to be in a Backups folder are not backups.
   const BACKUP_RE = /back\s*-?\s*up|\bbak\b|_bak|\bbkp?\b/i;
   const FILE_TYPES = ["File Geodatabase", "Service Definition", "CSV", "Shapefile", "Microsoft Excel", "GeoJson", "Code Attachment", "Image", "PDF", "Microsoft Word", "KML"];
+  const LAYER_TYPES = ["Feature Service", "Map Service", "Vector Tile Service", "Scene Service", "Image Service"];
+  // "TMTCRM_gdb" and "TMT CRM" count as the same name.
+  const sameName = s => s.toLowerCase().replace(/[_\s-]*f?gdb$/, "").replace(/[^a-z0-9]/g, "");
   const backupsPath = () => `/${S.schema[0]?.title}/Backups`;
   const isBackup = i => BACKUP_RE.test(i.title) || (i.tags || []).some(t => BACKUP_RE.test(t))
-    || (FILE_TYPES.includes(i.type) && BACKUP_RE.test(S.folderNames.get(i.owner)?.get(i.ownerFolder) || ""));
+    || (FILE_TYPES.includes(i.type) && BACKUP_RE.test(S.folderNames.get(i.owner)?.get(i.ownerFolder) || ""))
+    || (i.type === "File Geodatabase" && S.layerNames?.has(sameName(i.title)));
   const hiddenBackup = id => !$("showBackups").checked && folderOf(id).includes(backupsPath())
     && S.folder !== backupsPath() && !S.folder.startsWith(backupsPath() + "/");
 
@@ -333,6 +338,7 @@ require([
     if(!S.canFile || !S.schema.length) return;
     try {
       await loadFolderNames();
+      S.layerNames = new Set([...S.items.values()].filter(i => LAYER_TYPES.includes(i.type)).map(i => sameName(i.title)));
       const ids = [...S.items.values()].filter(i => !isFiled(i.id) && isBackup(i)).map(i => i.id);
       if(!ids.length) return;
       const path = backupsPath();
