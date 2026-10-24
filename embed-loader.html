@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="normal">
+<title>Loading…</title>
+<!--
+  Embed loader for the TMT Dashboard experience.
+
+  Experience Builder's embed widget shows a white page while a dashboard starts up, which hides the
+  page's background photo. Embedding this page instead keeps the photo visible (this page is
+  transparent) with a small "Loading…" pill, and fades the dashboard in once it has loaded.
+
+  Usage: embed-loader.html?src=<dashboard or experience URL>&label=<name shown while loading>
+  Only TMT portal dashboards and Experience Builder apps are accepted as src.
+-->
+<style>
+html, body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: "Inter", "Segoe UI", Tahoma, sans-serif;
+}
+
+#frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  opacity: 0;
+  transition: opacity .7s ease;
+}
+
+#cover {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 48px;
+  box-sizing: border-box;
+  pointer-events: none;
+  transition: opacity .7s ease;
+}
+
+.pill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: rgba(20, 17, 13, .78);
+  border: 1px solid rgba(241, 230, 208, .18);
+  color: #f1e6d0;
+  font-size: 14px;
+  letter-spacing: .02em;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(199, 180, 151, .35);
+  border-top-color: #c7b497;
+  animation: spin .9s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<iframe id="frame" title="Dashboard" allow="fullscreen; geolocation; clipboard-write"></iframe>
+<div id="cover"><div class="pill"><span class="spinner"></span><span id="label">Loading…</span></div></div>
+
+<script>
+(() => {
+  // Dashboards draw their panels a moment after their page has loaded, so wait a little longer
+  // before fading in. If the page never reports loaded, show it anyway after MAX_WAIT_MS.
+  const SETTLE_MS = 2500;
+  const MAX_WAIT_MS = 15000;
+  const ALLOWED = [
+    /^https:\/\/tmt\.maps\.arcgis\.com\/apps\/dashboards\//,
+    /^https:\/\/experience\.arcgis\.com\/experience\//
+  ];
+
+  const params = new URLSearchParams(location.search);
+  const src = params.get("src") || "";
+  const label = params.get("label");
+  const frame = document.getElementById("frame");
+  const cover = document.getElementById("cover");
+
+  if (label) {
+    document.getElementById("label").textContent = "Loading " + label + "…";
+    document.title = label;
+  }
+
+  if (!ALLOWED.some(pattern => pattern.test(src))) {
+    document.getElementById("label").textContent = "This page can't be shown.";
+    return;
+  }
+
+  let shown = false;
+  function show() {
+    if (shown) return;
+    shown = true;
+    frame.style.opacity = "1";
+    cover.style.opacity = "0";
+    setTimeout(() => cover.remove(), 800);
+  }
+
+  frame.addEventListener("load", () => setTimeout(show, SETTLE_MS));
+  setTimeout(show, MAX_WAIT_MS);
+  frame.src = src;
+})();
+</script>
+</body>
+</html>
