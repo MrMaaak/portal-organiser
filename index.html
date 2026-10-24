@@ -325,7 +325,10 @@ require([
   // look like clutter but the offline areas need them, so they're kept apart from Backups.
   // Type folders come before Backups, so a notebook that makes backups (say, "Nightly backup")
   // goes to Notebooks rather than being hidden as one.
+  // "additive" folders list every matching item, as an extra folder alongside wherever else it's filed.
   const AUTO_FOLDERS = [
+    { title: "Feature services", test: i => i.type === "Feature Service", additive: true },
+    { title: "Web maps", test: i => i.type === "Web Map", additive: true },
     { title: "Service definitions", test: i => i.type === "Service Definition" },
     { title: "Map areas", test: i => i.type === "Map Area" },
     { title: "Notebooks", test: i => i.type === "Notebook" },
@@ -348,22 +351,30 @@ require([
   }
 
   // Files items into the automatic folders (making them if needed), so new nightly exports, offline
-  // packages and service definitions never pile up in "Not filed yet". Items someone filed by hand are
-  // left alone; an item only in an automatic folder is moved if a higher rule now matches it.
+  // packages and service definitions never pile up in "Not filed yet". Additive folders get every
+  // matching item. For the rest, items someone filed by hand are left alone; an item only in automatic
+  // folders goes to the first rule it matches (and moves if a higher rule now matches it).
   async function fileNewBackups(){
     if(!S.canFile || !S.schema.length) return;
     try {
       await loadFolderNames();
       S.layerNames = new Set([...S.items.values()].filter(i => LAYER_TYPES.includes(i.type)).map(i => sameName(i.title)));
       const autoPaths = AUTO_FOLDERS.map(autoPath);
+      const exclusive = AUTO_FOLDERS.filter(f => !f.additive);
+      const exclusivePaths = exclusive.map(autoPath);
       const moves = new Map(), counts = {};
       for(const i of S.items.values()){
         const cur = folderOf(i.id);
-        if(cur.some(p => !autoPaths.includes(p))) continue;
-        const rule = AUTO_FOLDERS.find(f => f.test(i));
-        if(!rule || (cur.length === 1 && cur[0] === autoPath(rule))) continue;
-        moves.set(i.id, [autoPath(rule)]);
-        counts[rule.title] = (counts[rule.title] || 0) + 1;
+        let next = [...cur];
+        for(const f of AUTO_FOLDERS) if(f.additive && f.test(i) && !next.includes(autoPath(f))) next.push(autoPath(f));
+        if(!cur.some(p => !autoPaths.includes(p))){
+          const rule = exclusive.find(f => f.test(i));
+          if(rule) next = [...next.filter(p => !exclusivePaths.includes(p)), autoPath(rule)];
+        }
+        const added = next.filter(p => !cur.includes(p));
+        if(!added.length && next.length === cur.length) continue;
+        moves.set(i.id, next);
+        for(const p of added){ const t = p.slice(p.lastIndexOf("/") + 1); counts[t] = (counts[t] || 0) + 1; }
       }
       if(!moves.size) return;
       await saveMap({
