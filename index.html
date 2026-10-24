@@ -332,11 +332,18 @@ require([
     return { item: { id: r.id, owner: S.user.username, title: MAP_TITLE, access: "org" }, data };
   }
 
-  async function saveMap(){
-    const files = Object.fromEntries([...S.cats].filter(([, p]) => p.length));
+  // Saves start from the map as it is now, not as it was when this page loaded, so filing done by
+  // someone else (or another tab) in the meantime is kept. Only the items passed in are changed.
+  async function saveMap({ files = new Map(), schema = null } = {}){
+    const latest = await rest(`content/items/${S.map.id}/data`);
+    const merged = new Map(Object.entries(latest.files || {}));
+    for(const [id, paths] of files) merged.set(id, paths);
+    const newSchema = schema || latest.schema || S.schema;
     await rest(`content/users/${S.map.owner}/items/${S.map.id}/update`, {
-      text: JSON.stringify({ version: 1, schema: S.schema, files })
+      text: JSON.stringify({ version: 1, schema: newSchema, files: Object.fromEntries([...merged].filter(([, p]) => p.length)) })
     });
+    S.cats = merged;
+    S.schema = newSchema;
   }
 
   // ---------- Folder tree ----------
@@ -519,12 +526,7 @@ require([
   // ---------- Filing ----------
 
   // Changes go into the folder map only; if saving fails, the previous folders are put back.
-  async function setCategories(map){
-    const before = new Map([...map.keys()].map(id => [id, folderOf(id)]));
-    for(const [id, paths] of map) S.cats.set(id, paths);
-    try { await saveMap(); }
-    catch(e){ for(const [id, paths] of before) S.cats.set(id, paths); throw e; }
-  }
+  const setCategories = map => saveMap({ files: map });
 
   async function file(ids, path, keep){
     const map = new Map(ids.map(id => [id, keep ? [...new Set([...folderOf(id), path])] : [path]]));
@@ -548,12 +550,7 @@ require([
 
   // ---------- Folder management ----------
 
-  async function saveSchema(schema){
-    const old = S.schema;
-    S.schema = schema;
-    try { await saveMap(); }
-    catch(e){ S.schema = old; throw e; }
-  }
+  const saveSchema = (schema, files) => saveMap({ schema, files });
 
   function findNode(schema, path){
     const parts = path.split("/").slice(1);
@@ -568,6 +565,13 @@ require([
   }
 
   async function folderAction(act){
+    if(act === "autosort") return autoSort();
+    // Edit the latest folder tree, so folders someone else just added aren't lost.
+    try {
+      const latest = await rest(`content/items/${S.map.id}/data`);
+      S.schema = latest.schema || S.schema;
+      S.cats = new Map(Object.entries(latest.files || {}));
+    } catch {}
     const schema = structuredClone(S.schema);
     const sel = S.folder.startsWith("/") ? S.folder : null;
     try {
@@ -598,8 +602,7 @@ require([
           if(paths.some(p => p === sel || p.startsWith(sel + "/")))
             moves.set(id, paths.map(p => p === sel || p.startsWith(sel + "/") ? newPath + p.slice(sel.length) : p));
         }
-        await saveSchema(schema);
-        await setCategories(moves);
+        await saveSchema(schema, moves);
         S.folder = newPath;
       }
       if(act === "delete" && sel){
@@ -611,7 +614,6 @@ require([
         await saveSchema(schema);
         S.folder = "__all";
       }
-      if(act === "autosort") return autoSort();
       render();
     } catch(e){ report("Couldn't change folders", e.message, []); }
   }
