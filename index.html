@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TMT Portal Organiser</title>
+<script src="https://js.arcgis.com/4.30/"></script>
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#fff; --line:#e1e4e8; --text:#1f2328; --muted:#656d76;
+  --accent:#0079c1; --accent-soft:#e6f2fa; --warn-bg:#fff8e1; --warn:#8a6d00;
+  --danger:#c62828; --row-hover:#f0f4f8; --sel:#dcecf8; --drop:#c8e3f7;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#15181c; --panel:#1d2126; --line:#30363d; --text:#e6edf3; --muted:#9198a1;
+    --accent:#4aa3df; --accent-soft:#1c3346; --warn-bg:#3a3000; --warn:#f0d264;
+    --danger:#ff7b72; --row-hover:#252b31; --sel:#1f3b52; --drop:#24506f;
+  }
+}
+*{ box-sizing:border-box; }
+html,body{ height:100%; margin:0; }
+body{ background:var(--bg); color:var(--text); font:14px/1.4 "Segoe UI",Tahoma,Geneva,Verdana,sans-serif; }
+button,select,input{ font:inherit; color:inherit; }
+button{ cursor:pointer; border:1px solid var(--line); background:var(--panel); border-radius:6px; padding:5px 10px; }
+button:hover{ border-color:var(--accent); }
+button.primary{ background:var(--accent); border-color:var(--accent); color:#fff; }
+button:disabled{ opacity:.5; cursor:default; }
+select,input[type=search],input[type=text]{ border:1px solid var(--line); background:var(--panel); border-radius:6px; padding:5px 8px; }
+a{ color:var(--accent); }
+
+header{ display:flex; align-items:center; gap:12px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
+header h1{ font-size:16px; margin:0; font-weight:600; }
+header .who{ margin-left:auto; color:var(--muted); font-size:13px; }
+#notice{ display:none; padding:8px 16px; background:var(--warn-bg); color:var(--warn); border-bottom:1px solid var(--line); font-size:13px; }
+#status{ position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:#1f2328; color:#fff; padding:8px 14px; border-radius:6px; display:none; z-index:50; max-width:90vw; }
+
+main{ display:grid; grid-template-columns:270px 1fr 340px; height:calc(100% - 53px); }
+#tree,#list,#details{ overflow:auto; }
+#tree{ background:var(--panel); border-right:1px solid var(--line); padding:10px 8px; }
+#details{ background:var(--panel); border-left:1px solid var(--line); padding:14px; }
+#list{ display:flex; flex-direction:column; min-width:0; overflow:hidden; }
+#rows{ flex:1; overflow:auto; }
+td .title,td .sub{ overflow-wrap:anywhere; }
+
+.tree-head{ display:flex; justify-content:space-between; align-items:center; padding:2px 6px 8px; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+.node{ display:flex; align-items:center; gap:6px; padding:5px 6px; border-radius:6px; cursor:pointer; user-select:none; }
+.node:hover{ background:var(--row-hover); }
+.node.active{ background:var(--sel); font-weight:600; }
+.node.drop{ background:var(--drop); outline:2px dashed var(--accent); }
+.node .count{ margin-left:auto; color:var(--muted); font-size:12px; font-weight:400; }
+.node .twist{ width:14px; text-align:center; color:var(--muted); font-size:10px; }
+.tree-sep{ border-top:1px solid var(--line); margin:8px 4px; }
+.folder-actions{ display:flex; gap:6px; flex-wrap:wrap; padding:8px 6px; }
+.folder-actions button{ font-size:12px; padding:3px 8px; }
+
+.toolbar{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; padding:10px 14px; border-bottom:1px solid var(--line); background:var(--panel); }
+.toolbar input[type=search]{ flex:1 1 200px; }
+.crumb{ padding:10px 14px 0; font-size:15px; font-weight:600; }
+.selbar{ display:none; gap:8px; align-items:center; padding:8px 14px; background:var(--accent-soft); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+table{ width:100%; border-collapse:collapse; }
+th{ text-align:left; font-weight:600; font-size:12px; color:var(--muted); padding:8px 10px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); }
+td{ padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+tr.row{ cursor:pointer; }
+tr.row:hover td{ background:var(--row-hover); }
+tr.row.sel td{ background:var(--sel); }
+tr.row.current td{ box-shadow:inset 3px 0 0 var(--accent); }
+.title{ font-weight:500; }
+.sub{ color:var(--muted); font-size:12px; }
+.chip{ display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; background:var(--accent-soft); color:var(--accent); white-space:nowrap; }
+.chip.grey{ background:var(--row-hover); color:var(--muted); }
+.empty{ padding:40px 20px; text-align:center; color:var(--muted); }
+.more{ padding:12px; text-align:center; }
+
+#details h2{ font-size:16px; margin:0 0 4px; }
+#details dl{ display:grid; grid-template-columns:100px 1fr; gap:6px 10px; margin:14px 0; font-size:13px; }
+#details dt{ color:var(--muted); }
+#details dd{ margin:0; word-break:break-word; }
+#details h3{ font-size:13px; margin:18px 0 6px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+#details ul{ margin:0; padding-left:18px; }
+.links{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+
+#overlay{ position:fixed; inset:0; background:var(--bg); display:flex; align-items:center; justify-content:center; z-index:100; padding:16px; }
+.card{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:24px; max-width:460px; width:100%; }
+.card h2{ margin:0 0 8px; font-size:18px; }
+.card p{ color:var(--muted); }
+
+dialog{ border:1px solid var(--line); border-radius:10px; background:var(--panel); color:var(--text); max-width:520px; width:calc(100% - 32px); }
+dialog::backdrop{ background:rgba(0,0,0,.35); }
+dialog ul{ max-height:300px; overflow:auto; padding-left:18px; }
+
+@media (max-width:1000px){
+  main{ grid-template-columns:220px 1fr; }
+  #details{ display:none; position:fixed; right:0; top:53px; bottom:0; width:min(340px,100%); z-index:20; box-shadow:-4px 0 12px rgba(0,0,0,.2); }
+  #details.open{ display:block; }
+}
+@media (max-width:640px){
+  main{ grid-template-columns:1fr; grid-template-rows:auto 1fr; }
+  #tree{ max-height:35vh; border-right:0; border-bottom:1px solid var(--line); }
+  .hide-sm{ display:none; }
+}
+</style>
+</head>
+<body>
+
+<div id="overlay">
+  <div class="card">
+    <h2>TMT Portal Organiser</h2>
+    <p id="overlayText">Checking your ArcGIS sign-in…</p>
+    <button id="signInBtn" class="primary" style="display:none">Sign in with ArcGIS</button>
+  </div>
+</div>
+
+<header>
+  <h1>TMT Portal Organiser</h1>
+  <button id="refreshBtn" title="Reload everything from ArcGIS Online">Refresh</button>
+  <span class="who" id="who"></span>
+  <button id="signOutBtn">Sign out</button>
+</header>
+<div id="notice"></div>
+
+<main>
+  <nav id="tree"></nav>
+  <section id="list">
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="Search titles, owners, tags…">
+      <select id="typeFilter"><option value="">All types</option></select>
+      <select id="ownerFilter"><option value="">All owners</option></select>
+    </div>
+    <div class="crumb" id="crumb"></div>
+    <div class="selbar" id="selbar">
+      <strong id="selCount"></strong>
+      <label>Move to <select id="moveTo"></select></label>
+      <button id="moveBtn" class="primary">Move</button>
+      <button id="unfileBtn">Remove from folder</button>
+      <button id="clearSelBtn">Clear selection</button>
+    </div>
+    <div id="rows"></div>
+  </section>
+  <aside id="details"><div class="empty">Select an item to see its details.</div></aside>
+</main>
+
+<div id="status"></div>
+
+<dialog id="dlg">
+  <form method="dialog">
+    <h2 id="dlgTitle" style="margin-top:0;font-size:17px"></h2>
+    <div id="dlgBody"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button value="cancel">Cancel</button>
+      <button value="ok" class="primary" id="dlgOk">OK</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+require([
+  "esri/identity/OAuthInfo",
+  "esri/identity/IdentityManager"
+], function(OAuthInfo, esriId){
+// The ArcGIS loader skips async callbacks, so the async work lives in this wrapper.
+(async () => {
+
+  // OAuth app registered in ArcGIS Online (Content > New item > Developer credentials > OAuth credentials).
+  // Sign-in redirects the whole page (popups are blocked in some browsers), so the app's
+  // redirect URLs must include this page's address, e.g. http://localhost:8765/ for local use.
+  const APP_ID = "y6Vj1fCSHSqzigvs"; // "TMT Portal Organiser" OAuth credentials
+  const PORTAL_URL = "https://tmt.maps.arcgis.com";
+  const SHARING = PORTAL_URL + "/sharing";
+  const REST = SHARING + "/rest/";
+
+  // Folders filed before the folder map existed lived in this group's categories; a new map imports them.
+  const GROUP_TITLE = "TMT Portal Catalogue";
+  const DEFAULT_SCHEMA = [{
+    title: "Categories",
+    categories: [
+      { title: "Survey123 forms" },
+      { title: "Data layers", categories: [{ title: "Source data" }, { title: "Views" }] },
+      { title: "Maps and apps", categories: [
+        { title: "Web maps" }, { title: "Dashboards" }, { title: "Field Maps" }, { title: "Other apps" }
+      ]},
+      { title: "Automations", categories: [{ title: "FME" }, { title: "Make" }] },
+      { title: "Archive" }
+    ]
+  }];
+  const MAP_KEYWORD = "tmt-portal-organiser-map";
+  const MAP_TITLE = "TMT Portal Organiser – folder map";
+  const MAX_DEPTH = 6;
+  const PAGE = 300;
+
+  const S = {
+    token: null, user: null, org: null, map: null, canFile: false, isAdmin: false,
+    schema: [], items: new Map(), cats: new Map(),
+    folder: "__all", selection: new Set(), current: null, expanded: new Set(),
+    shown: PAGE, folderNames: new Map()
+  };
+
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+
+  // ---------- ArcGIS REST ----------
+
+  // Everything goes as a form POST so the token stays out of URLs and no CORS preflight is needed.
+  async function rest(path, params = {}){
+    const body = new URLSearchParams({ f: "json", token: S.token });
+    for(const [k, v] of Object.entries(params)){
+      if(v !== undefined && v !== null) body.set(k, typeof v === "object" ? JSON.stringify(v) : v);
+    }
+    const res = await fetch(REST + path, { method: "POST", body });
+    const json = await res.json();
+    if(json.error) throw new Error(json.error.message + (json.error.details?.length ? " – " + json.error.details.join(" ") : ""));
+    return json;
+  }
+
+  // First page tells us the total; the rest are fetched a few at a time.
+  async function pageAll(path, params){
+    const first = await rest(path, { ...params, num: 100, start: 1 });
+    const starts = [];
+    for(let s = 101; s <= first.total; s += 100) starts.push(s);
+    const pages = [];
+    let done = first.results.length;
+    for(let i = 0; i < starts.length; i += 6){
+      const batch = await Promise.all(starts.slice(i, i + 6).map(start => rest(path, { ...params, num: 100, start })));
+      batch.forEach(r => { pages.push(r.results); done += r.results.length; });
+      status(`Loading… ${done} of ${first.total}`);
+    }
+    return first.results.concat(...pages);
+  }
+
+  // ---------- Sign-in ----------
+
+  esriId.registerOAuthInfos([new OAuthInfo({ appId: APP_ID, portalUrl: PORTAL_URL, popup: false })]);
+
+  // Keep the sign-in for this browser tab, so a reload doesn't send you back through ArcGIS.
+  const AUTH_KEY = "tmt-organiser-auth";
+  try {
+    const saved = sessionStorage.getItem(AUTH_KEY);
+    if(saved) esriId.initialize(JSON.parse(saved));
+  } catch {}
+  const saveAuth = () => { try { sessionStorage.setItem(AUTH_KEY, JSON.stringify(esriId.toJSON())); } catch {} };
+  esriId.on("credential-create", saveAuth);
+
+  async function signIn(){
+    try {
+      return await esriId.checkSignInStatus(SHARING);
+    } catch {
+      $("overlayText").textContent = "Sign in with your tmt.maps.arcgis.com account to organise the portal.";
+      $("signInBtn").style.display = "";
+      return new Promise(resolve => {
+        $("signInBtn").onclick = async () => {
+          try { resolve(await esriId.getCredential(SHARING)); }
+          catch { $("overlayText").textContent = "Sign in failed or was cancelled. Please try again."; }
+        };
+      });
+    }
+  }
+
+  $("signOutBtn").onclick = () => {
+    try { sessionStorage.removeItem(AUTH_KEY); } catch {}
+    esriId.destroyCredentials();
+    location.reload();
+  };
+  $("refreshBtn").onclick = () => load();
+
+  const cred = await signIn();
+  S.token = cred.token;
+  saveAuth();
+
+  // ---------- Loading ----------
+
+  async function load(){
+    status("Loading the portal…");
+    const self = await rest("portals/self");
+    S.org = self;
+    S.user = self.user;
+    S.isAdmin = S.user.role === "org_admin";
+    $("who").textContent = `${S.user.fullName || S.user.username} · ${S.user.username}${S.isAdmin ? " (admin)" : ""}`;
+
+    const [items, map] = await Promise.all([
+      pageAll("search", { q: `orgid:${S.org.id}`, sortField: "title", sortOrder: "asc" }),
+      findMap().then(m => m || createMap())
+    ]);
+    $("overlay").style.display = "none";
+    S.items = new Map(items.filter(i => i.id !== map.item.id).map(i => [i.id, i]));
+    S.map = map.item;
+    S.schema = map.data.schema || [];
+    S.cats = new Map(Object.entries(map.data.files || {}));
+
+    // Admins can save someone else's map with this privilege; everyone else browses.
+    const privs = S.user.privileges || [];
+    S.canFile = S.map.owner === S.user.username || privs.includes("portal:admin:updateItems");
+    notice(S.canFile
+      ? (S.map.access === "private" && S.map.owner === S.user.username ? "Only you can see these folders. Share the “" + MAP_TITLE + "” item with the organisation so the team sees them too." : "")
+      : `You can browse the team's folders. Only ${S.map.owner} or an admin can change them.`);
+
+    fillFilters();
+    render();
+    status(`Loaded ${S.items.size} items.`, 2500);
+  }
+
+  // The folder map is one item holding { schema, files: { itemId: [paths] } }, shared with the org so
+  // everyone sees the same folders. Filing only edits this item, so it works for any item you can see.
+  // The oldest map wins, so a second person signing in joins the team's map instead of starting their own.
+  async function findMap(){
+    const r = await rest("search", { q: `typekeywords:"${MAP_KEYWORD}" orgid:${S.org.id}`, num: 20, sortField: "created", sortOrder: "asc" });
+    const map = r.results.find(i => i.access !== "private") || r.results.find(i => i.owner === S.user.username) || r.results[0];
+    if(!map) return null;
+    const data = await rest(`content/items/${map.id}/data`);
+    return { item: map, data };
+  }
+
+  // A new map starts from the default folders, plus anything already filed in the old catalogue group.
+  async function createMap(){
+    const data = { version: 1, schema: DEFAULT_SCHEMA, files: {} };
+    try {
+      const g = (await rest("community/groups", { q: `title:"${GROUP_TITLE}" orgid:${S.org.id}`, num: 5 })).results.find(x => x.title === GROUP_TITLE);
+      if(g){
+        const schema = (await rest(`community/groups/${g.id}/categorySchema`)).categorySchema;
+        if(schema?.length) data.schema = schema;
+        for(const i of await pageAll(`content/groups/${g.id}/search`, { q: "" }))
+          if(i.groupCategories?.length) data.files[i.id] = i.groupCategories;
+      }
+    } catch {}
+    const r = await rest(`content/users/${S.user.username}/addItem`, {
+      type: "Content Category Set", title: MAP_TITLE, typeKeywords: MAP_KEYWORD, tags: "organiser",
+      snippet: "Folder structure for the TMT Portal Organiser. Edit it through the organiser, not by hand.",
+      text: JSON.stringify(data)
+    });
+    // Share it with the org straight away, so the team sees the same folders.
+    try { await rest(`content/users/${S.user.username}/shareItems`, { items: r.id, org: true, everyone: false }); } catch {}
+    status("Created the team folder map.", 2500);
+    return { item: { id: r.id, owner: S.user.username, title: MAP_TITLE, access: "org" }, data };
+  }
+
+  async function saveMap(){
+    const files = Object.fromEntries([...S.cats].filter(([, p]) => p.length));
+    await rest(`content/users/${S.map.owner}/items/${S.map.id}/update`, {
+      text: JSON.stringify({ version: 1, schema: S.schema, files })
+    });
+  }
+
+  // ---------- Folder tree ----------
+
+  // Every category as { path, title, depth, children }, paths like "/Categories/Data layers/Views".
+  function flatten(nodes = S.schema, parent = "", depth = 1, out = []){
+    for(const n of nodes){
+      const path = parent + "/" + n.title;
+      out.push({ path, title: n.title, depth, hasKids: !!n.categories?.length });
+      if(n.categories) flatten(n.categories, path, depth + 1, out);
+    }
+    return out;
+  }
+  const folderOf = id => S.cats.get(id) || [];
+  const isFiled = id => folderOf(id).length > 0;
+  const label = path => path.split("/").slice(2).join(" › ") || path.split("/")[1];
+
+  function render(){ renderTree(); renderList(); renderSelbar(); }
+
+  function renderTree(){
+    const counts = new Map();
+    // Count only items this person can see; the map also keeps entries for items hidden from them.
+    for(const [id, paths] of S.cats) if(S.items.has(id)) for(const p of paths) counts.set(p, (counts.get(p) || 0) + 1);
+    const unfiled = [...S.items.keys()].filter(id => !isFiled(id)).length;
+    const folders = flatten();
+
+    let html = `<div class="tree-head">Folders</div>
+      ${node("__all", "All items", S.items.size, 0)}
+      ${node("__unfiled", "Not filed yet", unfiled, 0)}
+      <div class="tree-sep"></div>`;
+    for(const f of folders){
+      if(f.depth === 1 && S.schema.length === 1) continue; // hide the single "Categories" root
+      if(!visible(f.path)) continue;
+      html += node(f.path, f.title, counts.get(f.path) || 0, f.depth - (S.schema.length === 1 ? 2 : 1), f.hasKids);
+    }
+    if(S.canFile){
+      const sel = S.folder.startsWith("/");
+      html += `<div class="folder-actions">
+        <button data-act="new">+ New folder${sel ? " here" : ""}</button>
+        ${sel ? `<button data-act="rename">Rename</button><button data-act="delete">Delete</button>` : ""}
+        <button data-act="autosort" title="File unfiled items into folders by their type">Auto-sort…</button>
+      </div>`;
+    }
+    $("tree").innerHTML = html;
+  }
+
+  // A folder is open when expanded, and stays open while it or anything inside it is selected.
+  const isOpen = path => S.expanded.has(path) || S.folder === path || S.folder.startsWith(path + "/");
+
+  // Top-level folders always show; deeper ones only when every folder above them (below the root) is open.
+  function visible(path){
+    const parts = path.split("/").slice(1);
+    for(let d = 2; d < parts.length; d++) if(!isOpen("/" + parts.slice(0, d).join("/"))) return false;
+    return true;
+  }
+
+  function node(key, title, count, indent, hasKids){
+    const open = hasKids && isOpen(key);
+    return `<div class="node${S.folder === key ? " active" : ""}" data-folder="${esc(key)}" style="padding-left:${6 + indent * 16}px">
+      <span class="twist" data-twist="${hasKids ? esc(key) : ""}">${hasKids ? (open ? "▼" : "▶") : ""}</span>
+      <span>${key.startsWith("/") ? "📁" : key === "__all" ? "🗂️" : "📥"}</span>
+      <span>${esc(title)}</span><span class="count">${count}</span>
+    </div>`;
+  }
+
+  $("tree").addEventListener("click", e => {
+    const twist = e.target.closest("[data-twist]")?.dataset.twist;
+    if(twist){ S.expanded.has(twist) ? S.expanded.delete(twist) : S.expanded.add(twist); return renderTree(); }
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    if(act) return folderAction(act);
+    const f = e.target.closest("[data-folder]")?.dataset.folder;
+    if(f){ S.folder = f; S.shown = PAGE; render(); }
+  });
+
+  // Drag rows onto a folder to move them there; hold Ctrl to also keep them where they are.
+  $("tree").addEventListener("dragover", e => {
+    const n = e.target.closest("[data-folder]");
+    if(n && n.dataset.folder.startsWith("/") && S.canFile){ e.preventDefault(); n.classList.add("drop"); }
+  });
+  $("tree").addEventListener("dragleave", e => e.target.closest("[data-folder]")?.classList.remove("drop"));
+  $("tree").addEventListener("drop", e => {
+    const n = e.target.closest("[data-folder]");
+    if(!n) return;
+    e.preventDefault();
+    n.classList.remove("drop");
+    const ids = JSON.parse(e.dataTransfer.getData("text/plain") || "[]");
+    if(n.dataset.folder.startsWith("/") && ids.length) file(ids, n.dataset.folder, e.ctrlKey);
+  });
+
+  // ---------- Item list ----------
+
+  function visibleItems(){
+    const q = $("q").value.trim().toLowerCase();
+    const type = $("typeFilter").value, owner = $("ownerFilter").value;
+    return [...S.items.values()].filter(i => {
+      if(S.folder === "__unfiled" && isFiled(i.id)) return false;
+      if(S.folder.startsWith("/") && !folderOf(i.id).includes(S.folder)) return false;
+      if(type && i.type !== type) return false;
+      if(owner && i.owner !== owner) return false;
+      if(q && !`${i.title} ${i.owner} ${i.type} ${(i.tags || []).join(" ")} ${i.snippet || ""}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }
+
+  function renderList(){
+    const items = visibleItems();
+    $("crumb").textContent = S.folder === "__all" ? "All items" : S.folder === "__unfiled" ? "Not filed yet" : label(S.folder);
+    if(!items.length){
+      $("rows").innerHTML = `<div class="empty">${S.folder.startsWith("/") && !$("q").value
+        ? "This folder is empty. Drag items here from “All items” or “Not filed yet”." : "No items match."}</div>`;
+      return;
+    }
+    const allSel = items.every(i => S.selection.has(i.id));
+    let html = `<table><thead><tr>
+      <th style="width:30px"><input type="checkbox" id="selAll" ${allSel ? "checked" : ""} title="Select all shown"></th>
+      <th>Title</th><th class="hide-sm">Type</th><th class="hide-sm">Owner</th><th class="hide-sm">Folder</th><th class="hide-sm">Modified</th>
+    </tr></thead><tbody>`;
+    for(const i of items.slice(0, S.shown)){
+      const f = folderOf(i.id);
+      html += `<tr class="row${S.selection.has(i.id) ? " sel" : ""}${S.current === i.id ? " current" : ""}" draggable="${S.canFile}" data-id="${i.id}">
+        <td><input type="checkbox" data-sel="${i.id}" ${S.selection.has(i.id) ? "checked" : ""}></td>
+        <td><div class="title">${esc(i.title)}</div>${i.snippet ? `<div class="sub">${esc(i.snippet)}</div>` : ""}</td>
+        <td class="hide-sm"><span class="chip">${esc(i.type)}</span></td>
+        <td class="hide-sm">${esc(i.owner)}</td>
+        <td class="hide-sm">${f.length ? f.map(p => `<span class="chip grey">${esc(label(p))}</span>`).join(" ") : `<span class="sub">—</span>`}</td>
+        <td class="hide-sm sub">${new Date(i.modified).toLocaleDateString()}</td>
+      </tr>`;
+    }
+    html += "</tbody></table>";
+    if(items.length > S.shown) html += `<div class="more"><button id="moreBtn">Show more (${items.length - S.shown} left)</button></div>`;
+    $("rows").innerHTML = html;
+  }
+
+  $("rows").addEventListener("click", e => {
+    if(e.target.id === "moreBtn"){ S.shown += PAGE; return renderList(); }
+    if(e.target.id === "selAll"){
+      const ids = visibleItems().map(i => i.id);
+      ids.forEach(id => e.target.checked ? S.selection.add(id) : S.selection.delete(id));
+      return render();
+    }
+    const sel = e.target.dataset.sel;
+    if(sel){ S.selection.has(sel) ? S.selection.delete(sel) : S.selection.add(sel); return render(); }
+    const row = e.target.closest("tr.row");
+    if(row){ S.current = row.dataset.id; renderList(); showDetails(row.dataset.id); }
+  });
+
+  $("rows").addEventListener("dragstart", e => {
+    const id = e.target.closest("tr.row")?.dataset.id;
+    if(!id) return;
+    const ids = S.selection.has(id) ? [...S.selection] : [id];
+    e.dataTransfer.setData("text/plain", JSON.stringify(ids));
+    e.dataTransfer.effectAllowed = "copyMove";
+  });
+
+  for(const id of ["q", "typeFilter", "ownerFilter"]) $(id).addEventListener("input", () => { S.shown = PAGE; renderList(); });
+
+  function fillFilters(){
+    const opts = (sel, values, all) => {
+      const cur = sel.value;
+      sel.innerHTML = `<option value="">${all}</option>` + values.map(v => `<option${v === cur ? " selected" : ""}>${esc(v)}</option>`).join("");
+    };
+    const uniq = key => [...new Set([...S.items.values()].map(i => i[key]))].sort((a, b) => a.localeCompare(b));
+    opts($("typeFilter"), uniq("type"), "All types");
+    opts($("ownerFilter"), uniq("owner"), "All owners");
+  }
+
+  // ---------- Selection bar ----------
+
+  function renderSelbar(){
+    const n = S.selection.size;
+    $("selbar").style.display = n && S.canFile ? "flex" : "none";
+    $("selCount").textContent = `${n} selected`;
+    $("moveTo").innerHTML = flatten().filter(f => !(f.depth === 1 && S.schema.length === 1))
+      .map(f => `<option value="${esc(f.path)}"${f.path === S.folder ? " selected" : ""}>${esc(label(f.path))}</option>`).join("");
+  }
+  $("moveBtn").onclick = () => file([...S.selection], $("moveTo").value, false);
+  $("unfileBtn").onclick = () => unfile([...S.selection]);
+  $("clearSelBtn").onclick = () => { S.selection.clear(); render(); };
+
+  // ---------- Filing ----------
+
+  // Changes go into the folder map only; if saving fails, the previous folders are put back.
+  async function setCategories(map){
+    const before = new Map([...map.keys()].map(id => [id, folderOf(id)]));
+    for(const [id, paths] of map) S.cats.set(id, paths);
+    try { await saveMap(); }
+    catch(e){ for(const [id, paths] of before) S.cats.set(id, paths); throw e; }
+  }
+
+  async function file(ids, path, keep){
+    const map = new Map(ids.map(id => [id, keep ? [...new Set([...folderOf(id), path])] : [path]]));
+    status("Saving…");
+    try {
+      await setCategories(map);
+      status(`${map.size} item${map.size === 1 ? "" : "s"} ${keep ? "added to" : "moved to"} ${label(path)}.`, 3000);
+    } catch(e){ report("Couldn't save the folders", e.message, []); }
+    S.selection.clear();
+    render();
+    if(S.current) showDetails(S.current);
+  }
+
+  async function unfile(ids){
+    const map = new Map(ids.filter(id => isFiled(id)).map(id => [id, S.folder.startsWith("/") ? folderOf(id).filter(p => p !== S.folder) : []]));
+    try { await setCategories(map); status(`${map.size} removed from ${S.folder.startsWith("/") ? label(S.folder) : "their folders"}.`, 3000); }
+    catch(e){ report("Couldn't save the folders", e.message, []); }
+    S.selection.clear();
+    render();
+  }
+
+  // ---------- Folder management ----------
+
+  async function saveSchema(schema){
+    const old = S.schema;
+    S.schema = schema;
+    try { await saveMap(); }
+    catch(e){ S.schema = old; throw e; }
+  }
+
+  function findNode(schema, path){
+    const parts = path.split("/").slice(1);
+    let list = schema, n = null, parent = null;
+    for(const t of parts){
+      parent = n;
+      n = list.find(x => x.title === t);
+      if(!n) return {};
+      list = n.categories || [];
+    }
+    return { node: n, parent, siblings: parent ? parent.categories : schema };
+  }
+
+  async function folderAction(act){
+    const schema = structuredClone(S.schema);
+    const sel = S.folder.startsWith("/") ? S.folder : null;
+    try {
+      if(act === "new"){
+        const parentPath = sel || (schema.length === 1 ? "/" + schema[0].title : null);
+        const depth = parentPath ? parentPath.split("/").length - 1 : 0;
+        if(depth >= MAX_DEPTH) return report("Too deep", `Folders can only go ${MAX_DEPTH - 1} levels deep. Pick a higher folder first.`, []);
+        const name = await ask("New folder", `Name of the new folder${sel ? ` inside “${label(sel)}”` : ""}:`);
+        if(!name) return;
+        if(/\//.test(name)) return report("Invalid name", "Folder names can't contain “/”.", []);
+        const target = parentPath ? findNode(schema, parentPath).node : null;
+        const list = target ? (target.categories ||= []) : schema;
+        if(list.some(x => x.title === name)) return report("Already exists", `There's already a folder called “${name}” here.`, []);
+        list.push({ title: name });
+        await saveSchema(schema);
+        if(parentPath) S.expanded.add(parentPath);
+      }
+      if(act === "rename" && sel){
+        const { node } = findNode(schema, sel);
+        const name = await ask("Rename folder", "New name:", node.title);
+        if(!name || name === node.title) return;
+        if(/\//.test(name)) return report("Invalid name", "Folder names can't contain “/”.", []);
+        node.title = name;
+        const newPath = sel.slice(0, sel.lastIndexOf("/") + 1) + name;
+        // Items keep the old path text, so re-file everything in and under the renamed folder.
+        const moves = new Map();
+        for(const [id, paths] of S.cats){
+          if(paths.some(p => p === sel || p.startsWith(sel + "/")))
+            moves.set(id, paths.map(p => p === sel || p.startsWith(sel + "/") ? newPath + p.slice(sel.length) : p));
+        }
+        await saveSchema(schema);
+        await setCategories(moves);
+        S.folder = newPath;
+      }
+      if(act === "delete" && sel){
+        const { node, siblings } = findNode(schema, sel);
+        const used = [...S.cats.values()].some(paths => paths.some(p => p === sel || p.startsWith(sel + "/")));
+        if(used || node.categories?.length) return report("Folder isn't empty", "Move its items and subfolders out first, then delete it.", []);
+        if(!await confirmDlg("Delete folder", `Delete the empty folder “${label(sel)}”?`)) return;
+        siblings.splice(siblings.indexOf(node), 1);
+        await saveSchema(schema);
+        S.folder = "__all";
+      }
+      if(act === "autosort") return autoSort();
+      render();
+    } catch(e){ report("Couldn't change folders", e.message, []); }
+  }
+
+  // Suggested folder for an item, by type, using the default folder names (only if that folder exists).
+  function suggest(i){
+    const k = i.typeKeywords || [];
+    const t = i.type;
+    let p = null;
+    if(t === "Form") p = "Survey123 forms";
+    else if(t === "Feature Service" && k.includes("View Service")) p = "Data layers/Views";
+    else if(["Feature Service", "Map Service", "Vector Tile Service", "Image Service", "Scene Service", "WFS", "WMS", "CSV", "Microsoft Excel", "File Geodatabase", "Shapefile", "GeoJson"].includes(t)) p = "Data layers/Source data";
+    else if(t === "Web Map") p = "Maps and apps/Web maps";
+    else if(t === "Dashboard") p = "Maps and apps/Dashboards";
+    else if(["Web Mapping Application", "Web Experience", "StoryMap", "Hub Site Application", "Hub Page", "Instant App"].includes(t)) p = "Maps and apps/Other apps";
+    if(!p || S.schema.length !== 1) return null;
+    const full = `/${S.schema[0].title}/${p}`;
+    return flatten().some(f => f.path === full) ? full : null;
+  }
+
+  async function autoSort(){
+    const plan = new Map();
+    for(const i of S.items.values()){
+      if(isFiled(i.id)) continue;
+      const p = suggest(i);
+      if(p) (plan.get(p) || plan.set(p, []).get(p)).push(i.id);
+    }
+    if(!plan.size) return report("Nothing to sort", "Every item that has an obvious folder is already filed.", []);
+    const lines = [...plan].map(([p, ids]) => `${label(p)}: ${ids.length}`);
+    const ok = await confirmDlg("Auto-sort unfiled items",
+      `This files items that aren't in any folder yet, based on their type. Nothing moves, changes owner or changes sharing in ArcGIS Online; only your folder map is updated.<ul>${lines.map(l => `<li>${esc(l)}</li>`).join("")}</ul>`);
+    if(!ok) return;
+    const all = new Map([...plan].flatMap(([p, ids]) => ids.map(id => [id, [p]])));
+    try { await setCategories(all); status(`Filed ${all.size} items.`, 3000); }
+    catch(e){ report("Couldn't save the folders", e.message, []); }
+    render();
+  }
+
+  // ---------- Details ----------
+
+  async function showDetails(id){
+    const i = S.items.get(id);
+    const el = $("details");
+    el.classList.add("open");
+    const f = folderOf(id);
+    el.innerHTML = `
+      <button onclick="this.parentElement.classList.remove('open')" style="float:right" class="hide-lg">✕</button>
+      <h2>${esc(i.title)}</h2>
+      <span class="chip">${esc(i.type)}</span>
+      ${i.snippet ? `<p>${esc(i.snippet)}</p>` : `<p class="sub">No summary. Add one in ArcGIS Online so people know what this is.</p>`}
+      <dl>
+        <dt>Organiser folder</dt><dd>${f.length ? f.map(p => esc(label(p))).join("<br>") : "Not filed yet"}</dd>
+        <dt>Owner</dt><dd>${esc(i.owner)}</dd>
+        <dt>Stored in</dt><dd id="realFolder">…</dd>
+        <dt>Shared with</dt><dd>${esc({ private: "Owner only", shared: "Groups", org: "Organisation", public: "Everyone (public)" }[i.access] || i.access)}</dd>
+        <dt>Modified</dt><dd>${new Date(i.modified).toLocaleString()}</dd>
+        <dt>Views</dt><dd>${i.numViews ?? "—"}</dd>
+        ${i.tags?.length ? `<dt>Tags</dt><dd>${i.tags.map(esc).join(", ")}</dd>` : ""}
+      </dl>
+      <div class="links">
+        <a href="${PORTAL_URL}/home/item.html?id=${id}" target="_blank" rel="noopener">Open in ArcGIS Online</a>
+        ${i.type === "Form" ? `<a href="https://survey123.arcgis.com/surveys/${id}/overview" target="_blank" rel="noopener">Open in Survey123</a>` : ""}
+      </div>
+      <div id="related"></div>`;
+
+    realFolder(i).then(name => { if($("realFolder")) $("realFolder").textContent = name; });
+    related(i).then(html => { if($("related")) $("related").innerHTML = html; });
+  }
+
+  async function realFolder(i){
+    if(!i.ownerFolder) return `${i.owner} › (root)`;
+    if(!S.folderNames.has(i.owner)){
+      try {
+        const r = await rest(`content/users/${i.owner}`, { num: 1 });
+        S.folderNames.set(i.owner, new Map((r.folders || []).map(f => [f.id, f.title])));
+      } catch { S.folderNames.set(i.owner, new Map()); }
+    }
+    return `${i.owner} › ${S.folderNames.get(i.owner).get(i.ownerFolder) || "a folder you can't see"}`;
+  }
+
+  // What this item feeds and is fed by, from ArcGIS item relationships.
+  async function related(i){
+    const lookups = [
+      ["Survey2Service", "forward", "Saves its data to"],
+      ["Survey2Service", "reverse", "Survey123 forms using this"],
+      ["Service2Service", "forward", "Views made from this"],
+      ["Service2Service", "reverse", "View of"],
+      ["Map2Service", "forward", "Layers in this map"],
+      ["Map2Service", "reverse", "Maps using this"]
+    ];
+    const parts = await Promise.all(lookups.map(async ([rel, dir, title]) => {
+      try {
+        const r = await rest(`content/items/${i.id}/relatedItems`, { relationshipType: rel, direction: dir });
+        if(!r.relatedItems?.length) return "";
+        return `<h3>${title}</h3><ul>${r.relatedItems.map(x =>
+          `<li><a href="#" data-goto="${x.id}">${esc(x.title)}</a> <span class="sub">${esc(x.type)}</span></li>`).join("")}</ul>`;
+      } catch { return ""; }
+    }));
+    return parts.join("");
+  }
+
+  $("details").addEventListener("click", e => {
+    const id = e.target.dataset.goto;
+    if(!id) return;
+    e.preventDefault();
+    if(S.items.has(id)){ S.current = id; showDetails(id); renderList(); }
+    else window.open(`${PORTAL_URL}/home/item.html?id=${id}`, "_blank", "noopener");
+  });
+
+  // ---------- Little UI helpers ----------
+
+  let statusTimer;
+  function status(msg, hideAfter){
+    const el = $("status");
+    el.textContent = msg;
+    el.style.display = "block";
+    clearTimeout(statusTimer);
+    if(hideAfter) statusTimer = setTimeout(() => el.style.display = "none", hideAfter);
+  }
+  function notice(msg){ $("notice").textContent = msg; $("notice").style.display = msg ? "block" : "none"; }
+
+  function dialog(title, bodyHtml, okLabel = "OK", showCancel = true){
+    $("dlgTitle").textContent = title;
+    $("dlgBody").innerHTML = bodyHtml;
+    $("dlgOk").textContent = okLabel;
+    $("dlg").querySelector('button[value="cancel"]').style.display = showCancel ? "" : "none";
+    $("dlg").returnValue = "";
+    $("dlg").showModal();
+    return new Promise(res => $("dlg").addEventListener("close", () => res($("dlg").returnValue === "ok"), { once: true }));
+  }
+  async function ask(title, prompt, value = ""){
+    const ok = dialog(title, `<label>${esc(prompt)}<br><input type="text" id="dlgInput" style="width:100%;margin-top:6px" value="${esc(value)}"></label>`);
+    setTimeout(() => $("dlgInput").select());
+    // Cancel is the form's first button, so Enter would otherwise cancel.
+    $("dlgInput").addEventListener("keydown", e => { if(e.key === "Enter"){ e.preventDefault(); $("dlg").close("ok"); } });
+    return (await ok) ? $("dlgInput").value.trim() : null;
+  }
+  const confirmDlg = (title, html) => dialog(title, html, "Go ahead");
+  function report(title, msg, lines){
+    $("status").style.display = "none";
+    return dialog(title, `<p>${esc(msg)}</p>${lines.length ? `<ul>${lines.map(l => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}`, "OK", false);
+  }
+
+  try { await load(); }
+  catch(e){ $("overlay").style.display = "flex"; $("signInBtn").style.display = "none"; $("overlayText").textContent = "Couldn't load the portal: " + e.message; }
+
+})();
+});
+</script>
+<style>@media (min-width:1001px){ .hide-lg{ display:none; } }</style>
+</body>
+</html>
