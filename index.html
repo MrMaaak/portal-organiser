@@ -77,6 +77,7 @@ tr.row.current td{ box-shadow:inset 3px 0 0 var(--accent); }
 .more{ padding:12px; text-align:center; }
 
 #details h2{ font-size:16px; margin:0 0 4px; }
+#details .note{ background:var(--warn-bg); color:var(--warn); padding:8px 10px; border-radius:6px; font-size:13px; }
 #details dl{ display:grid; grid-template-columns:100px 1fr; gap:6px 10px; margin:14px 0; font-size:13px; }
 #details dt{ color:var(--muted); }
 #details dd{ margin:0; word-break:break-word; }
@@ -294,6 +295,8 @@ require([
     S.schema = map.data.schema || [];
     S.cats = new Map(Object.entries(map.data.files || {}));
     S.synced = map.data.synced || {};
+    S.notes = map.data.notes || {};
+    S.cleanup = map.data.cleanup || {};
 
     // Admins can save someone else's map with this privilege; everyone else browses.
     const privs = S.user.privileges || [];
@@ -440,12 +443,16 @@ require([
     const merged = new Map(Object.entries(latest.files || {}));
     for(const [id, paths] of files) merged.set(id, paths);
     let newSchema = schema || latest.schema || S.schema;
-    const extra = { synced: latest.synced || {} };
+    // Keep everything else stored in the map (sync records, clean-up notes, saved sharing) as it is.
+    const { schema: _s, files: _f, version: _v, ...rest } = latest;
+    const extra = { ...rest, synced: latest.synced || {} };
     if(edit) newSchema = edit({ schema: newSchema, files: merged, extra });
     await rest(`content/users/${S.map.owner}/items/${S.map.id}/update`, {
       text: JSON.stringify({ ...extra, version: 1, schema: newSchema, files: Object.fromEntries([...merged].filter(([, p]) => p.length)) })
     });
     S.synced = extra.synced;
+    S.notes = extra.notes || {};
+    S.cleanup = extra.cleanup || {};
     S.cats = merged;
     S.schema = newSchema;
   }
@@ -975,6 +982,15 @@ require([
 
   // ---------- Details ----------
 
+  // The sharing an item had when it became a delete candidate, so it can be put back exactly.
+  function savedSharing(id){
+    const s = S.cleanup?.sharing?.[id];
+    if(!s) return "";
+    const level = { private: "owner only", shared: "groups only", org: "the organisation", public: "everyone (public)" }[s.access] || s.access;
+    const groups = s.groups?.length ? `, plus groups: ${s.groups.map(g => esc(g.title)).join(", ")}` : "";
+    return `<p class="sub">Sharing saved before clean-up: ${esc(level)}${groups}.</p>`;
+  }
+
   async function showDetails(id){
     const i = S.items.get(id);
     const el = $("details");
@@ -985,6 +1001,8 @@ require([
       <h2>${esc(i.title)}</h2>
       <span class="chip">${esc(i.type)}</span>
       ${i.snippet ? `<p>${esc(i.snippet)}</p>` : `<p class="sub">No summary. Add one in ArcGIS Online so people know what this is.</p>`}
+      ${S.notes?.[id] ? `<p class="note">${esc(S.notes[id])}</p>` : ""}
+      ${savedSharing(id)}
       <dl>
         <dt>Organiser folder</dt><dd>${f.length ? f.map(p => esc(label(p))).join("<br>") : "Not filed yet"}</dd>
         <dt>Owner</dt><dd>${esc(i.owner)}</dd>
