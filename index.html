@@ -820,7 +820,8 @@ require([
     }).join("")}</ul>`;
     const pageCount = [...plan.files.values()].reduce((n, ps) => n + ps.size, 0) - 1;
     const ok = await dialog(`Preview: ${label(rootPath)}`, `
-      <p>${plan.files.size - 1} items across the pages (${pageCount} filings, since some items are used on more than one page).
+      <p>${plan.files.size - 1} items across the pages${pageCount > plan.files.size - 1 ? `, some on more than one page (${pageCount} filings in all)` : ""}.
+        The experience itself goes in the top folder.
         ${managed ? "This replaces what's in this folder from the last sync." : ""}
         Items keep any other folders they're in.</p>
       <div class="preview">${tree(plan.categories, rootPath)}</div>`, "Save these folders");
