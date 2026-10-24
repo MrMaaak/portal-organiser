@@ -88,6 +88,9 @@ tr.row.current td{ box-shadow:inset 3px 0 0 var(--accent); }
 dialog{ border:1px solid var(--line); border-radius:10px; background:var(--panel); color:var(--text); max-width:520px; width:calc(100% - 32px); }
 dialog::backdrop{ background:rgba(0,0,0,.35); }
 dialog ul{ max-height:300px; overflow:auto; padding-left:18px; }
+dialog .preview{ max-height:55vh; overflow:auto; border:1px solid var(--line); border-radius:6px; padding:6px 8px 6px 0; }
+dialog .preview ul{ max-height:none; overflow:visible; margin:2px 0; }
+dialog .preview li{ margin:2px 0; }
 
 @media (max-width:1000px){
   main{ grid-template-columns:220px 1fr; }
@@ -285,6 +288,7 @@ require([
     S.map = map.item;
     S.schema = map.data.schema || [];
     S.cats = new Map(Object.entries(map.data.files || {}));
+    S.synced = map.data.synced || {};
 
     // Admins can save someone else's map with this privilege; everyone else browses.
     const privs = S.user.privileges || [];
@@ -334,14 +338,18 @@ require([
 
   // Saves start from the map as it is now, not as it was when this page loaded, so filing done by
   // someone else (or another tab) in the meantime is kept. Only the items passed in are changed.
-  async function saveMap({ files = new Map(), schema = null } = {}){
+  // `edit` can rework the latest map before saving (used by experience sync, which replaces a whole subtree).
+  async function saveMap({ files = new Map(), schema = null, edit = null } = {}){
     const latest = await rest(`content/items/${S.map.id}/data`);
     const merged = new Map(Object.entries(latest.files || {}));
     for(const [id, paths] of files) merged.set(id, paths);
-    const newSchema = schema || latest.schema || S.schema;
+    let newSchema = schema || latest.schema || S.schema;
+    const extra = { synced: latest.synced || {} };
+    if(edit) newSchema = edit({ schema: newSchema, files: merged, extra });
     await rest(`content/users/${S.map.owner}/items/${S.map.id}/update`, {
-      text: JSON.stringify({ version: 1, schema: newSchema, files: Object.fromEntries([...merged].filter(([, p]) => p.length)) })
+      text: JSON.stringify({ ...extra, version: 1, schema: newSchema, files: Object.fromEntries([...merged].filter(([, p]) => p.length)) })
     });
+    S.synced = extra.synced;
     S.cats = merged;
     S.schema = newSchema;
   }
@@ -385,6 +393,7 @@ require([
         <button data-act="new">+ New folder${sel ? " here" : ""}</button>
         ${sel ? `<button data-act="rename">Rename</button><button data-act="delete">Delete</button>` : ""}
         <button data-act="autosort" title="File unfiled items into folders by their type">Auto-sort…</button>
+        <button data-act="syncexp" title="Make folders that mirror an Experience Builder app's menu, filled with what each page uses">Sync from experience…</button>
       </div>`;
     }
     $("tree").innerHTML = html;
@@ -566,6 +575,7 @@ require([
 
   async function folderAction(act){
     if(act === "autosort") return autoSort();
+    if(act === "syncexp") return syncExperience();
     // Edit the latest folder tree, so folders someone else just added aren't lost.
     try {
       const latest = await rest(`content/items/${S.map.id}/data`);
@@ -605,7 +615,23 @@ require([
         await saveSchema(schema, moves);
         S.folder = newPath;
       }
-      if(act === "delete" && sel){
+      // A synced folder can always be deleted; it can be made again with Sync from experience.
+      if(act === "delete" && sel && S.synced?.[sel]){
+        if(!await confirmDlg("Delete synced folder", `Delete “${label(sel)}” and its page folders? Items stay in any other folders they're in, and you can sync it again any time.`)) return;
+        await saveMap({ edit: ({ schema: s0, files, extra }) => {
+          const s = structuredClone(s0);
+          const { node, siblings } = findNode(s, sel);
+          if(node) siblings.splice(siblings.indexOf(node), 1);
+          for(const [id, ps] of files){
+            const keep = ps.filter(p => p !== sel && !p.startsWith(sel + "/"));
+            if(keep.length !== ps.length) files.set(id, keep);
+          }
+          delete extra.synced[sel];
+          return s;
+        }});
+        S.folder = "__all";
+      }
+      else if(act === "delete" && sel){
         const { node, siblings } = findNode(schema, sel);
         const used = [...S.cats.values()].some(paths => paths.some(p => p === sel || p.startsWith(sel + "/")));
         if(used || node.categories?.length) return report("Folder isn't empty", "Move its items and subfolders out first, then delete it.", []);
@@ -650,6 +676,180 @@ require([
     try { await setCategories(all); status(`Filed ${all.size} items.`, 3000); }
     catch(e){ report("Couldn't save the folders", e.message, []); }
     render();
+  }
+
+  // ---------- Experience sync ----------
+
+  // Works out, page by page, which portal items an Experience Builder app uses.
+  // Returns { tree: [{ title, items, children }], shared } where shared is what the header and footer use.
+  function readExperience(cfg){
+    const dsById = new Map();
+    const addDs = ds => { if(!ds?.id) return; dsById.set(ds.id, ds); Object.values(ds.childDataSourceJsons || {}).forEach(addDs); };
+    Object.values(cfg.dataSources || {}).forEach(addDs);
+
+    // A widget uses an item through a data source (a web map or one of its layers) or a link in its
+    // settings (an embedded dashboard or Survey123 form). Only items in this portal count.
+    const itemsOfWidget = w => {
+      const ids = new Set();
+      for(const u of w.useDataSources || []) for(const k of [u.dataSourceId, u.mainDataSourceId]){
+        const ds = dsById.get(k);
+        if(ds?.itemId) ids.add(ds.itemId);
+      }
+      for(const id of JSON.stringify(w.config || {}).match(/[0-9a-f]{32}/g) || []) ids.add(id);
+      return [...ids].filter(id => S.items.has(id));
+    };
+
+    // Everything reachable from a layout: widgets in sections and their views, widgets inside
+    // container widgets (maps, columns, accordions), and pop-up windows that buttons open.
+    function collect(layoutRef, out, seen){
+      for(const lid of Object.values(layoutRef || {})){
+        if(seen.has(lid)) continue;
+        seen.add(lid);
+        for(const c of Object.values(cfg.layouts?.[lid]?.content || {})){
+          if(c.type === "WIDGET" && c.widgetId) visitWidget(c.widgetId, out, seen);
+          if(c.type === "SECTION") for(const v of cfg.sections?.[c.sectionId]?.views || []) collect(cfg.views?.[v]?.layout, out, seen);
+        }
+      }
+    }
+    function visitWidget(wid, out, seen){
+      if(seen.has(wid)) return;
+      seen.add(wid);
+      const w = cfg.widgets?.[wid];
+      if(!w) return;
+      itemsOfWidget(w).forEach(id => out.add(id));
+      for(const ref of Object.values(w.layouts || {})) collect(ref, out, seen);
+      for(const d of JSON.stringify(w.config || {}).match(/dialog_\d+/g) || []) collect(cfg.dialogs?.[d]?.layout, out, seen);
+    }
+    const itemsIn = ref => { const out = new Set(); collect(ref, out, new Set()); return out; };
+
+    const clean = s => String(s || "").replace(/\//g, "-").trim().slice(0, 90) || "Untitled";
+    const node = (id, kids = []) => {
+      const p = cfg.pages?.[id] || {};
+      return { title: clean(p.label), items: p.type === "FOLDER" ? new Set() : itemsIn(p.layout), children: kids.map(k => node(k)) };
+    };
+    return {
+      tree: (cfg.pageStructure || []).map(e => { const [id, kids] = Object.entries(e)[0]; return node(id, kids); }),
+      shared: new Set([...itemsIn(cfg.header?.layout), ...itemsIn(cfg.footer?.layout)])
+    };
+  }
+
+  const SHARED_FOLDER = "Every page (header and footer)";
+
+  // Turns the page tree into folders under rootPath and the item → folders it belongs in.
+  // Duplicate page names get a number, and the experience itself is filed at the top.
+  function syncPlan(exp, read, rootPath){
+    const files = new Map();
+    const add = (id, p) => (files.get(id) || files.set(id, new Set()).get(id)).add(p);
+    const toSchema = (nodes, parent) => {
+      const used = new Set();
+      return nodes.map(n => {
+        let t = n.title, k = 2;
+        while(used.has(t)) t = `${n.title} (${k++})`;
+        used.add(t);
+        const p = `${parent}/${t}`;
+        n.items.forEach(id => add(id, p));
+        const kids = toSchema(n.children, p);
+        return kids.length ? { title: t, categories: kids } : { title: t };
+      });
+    };
+    const categories = toSchema(read.tree, rootPath);
+    if(read.shared.size){
+      categories.push({ title: SHARED_FOLDER });
+      read.shared.forEach(id => add(id, `${rootPath}/${SHARED_FOLDER}`));
+    }
+    add(exp.id, rootPath);
+    const depth = (nodes, d) => nodes.reduce((m, n) => Math.max(m, n.categories ? depth(n.categories, d + 1) : d), d);
+    return { categories, files, depth: depth(categories, rootPath.split("/").length) };
+  }
+
+  async function syncExperience(){
+    const exps = [...S.items.values()].filter(i => i.type === "Web Experience").sort((a, b) => a.title.localeCompare(b.title));
+    if(!exps.length) return report("No experiences", "There are no Experience Builder apps you can see.", []);
+    const rootBase = "/" + S.schema[0].title;
+    const folders = flatten().filter(f => f.path !== rootBase);
+    const synced = Object.entries(S.synced || {});
+    const shown = dialog("Sync from experience", `
+      <p class="sub">Makes a folder for each page in the app's menu and files what that page uses: dashboards, maps, layers and forms.
+        Nothing changes in ArcGIS Online. You'll see a preview before anything is saved.</p>
+      <label>Experience<br><select id="syncExp" style="width:100%;margin-top:4px">${exps.map(e =>
+        `<option value="${e.id}">${esc(e.title)} (${esc(e.owner)})</option>`).join("")}</select></label>
+      <p><label>Put the page folders in<br><select id="syncParent" style="width:100%;margin-top:4px">
+        <option value="${esc(rootBase)}">Top level</option>
+        ${folders.map(f => `<option value="${esc(f.path)}">${esc(label(f.path))}</option>`).join("")}</select></label></p>
+      <label>Folder name<br><input type="text" id="syncName" style="width:100%;margin-top:4px"></label>
+      ${synced.length ? `<p class="sub">Already synced: ${synced.map(([p, s]) => `${esc(label(p))} (from ${esc(s.title)})`).join("; ")}.
+        Choosing an experience fills in where it was synced before, and running it again updates that folder.</p>` : ""}`, "Preview");
+    // Default to where this experience was synced before, otherwise a top-level folder named after it.
+    const pick = () => {
+      const id = $("syncExp").value;
+      const prev = synced.find(([, s]) => s.experienceId === id);
+      const path = prev ? prev[0] : `${rootBase}/${S.items.get(id).title.replace(/\//g, "-")}`;
+      $("syncParent").value = path.slice(0, path.lastIndexOf("/"));
+      $("syncName").value = path.slice(path.lastIndexOf("/") + 1);
+    };
+    $("syncExp").addEventListener("change", pick);
+    pick();
+    if(!await shown) return;
+
+    const exp = S.items.get($("syncExp").value);
+    const parent = $("syncParent").value;
+    const name = $("syncName").value.trim();
+    if(!name || name.includes("/")) return report("Invalid name", "Give the folder a name without “/”.", []);
+    const rootPath = `${parent}/${name}`;
+    const managed = S.synced?.[rootPath];
+    if(managed && managed.experienceId !== exp.id)
+      return report("Folder in use", `“${label(rootPath)}” is already synced from ${managed.title}. Pick another name.`, []);
+    if(!managed && flatten().some(f => f.path === rootPath))
+      return report("Folder already exists", `“${label(rootPath)}” is one of your own folders. Sync only replaces folders it made itself, so pick another name.`, []);
+
+    status("Reading the experience…");
+    let plan;
+    try { plan = syncPlan(exp, readExperience(await rest(`content/items/${exp.id}/data`)), rootPath); }
+    catch(e){ return report("Couldn't read the experience", e.message, []); }
+    $("status").style.display = "none";
+    if(plan.depth > MAX_DEPTH)
+      return report("Too deep", `The menu would end up ${plan.depth - 1} folders deep, but folders can only go ${MAX_DEPTH - 1} deep. Put it in a higher folder.`, []);
+
+    const listFor = p => [...plan.files].filter(([, ps]) => ps.has(p)).map(([id]) => S.items.get(id)).sort((a, b) => a.title.localeCompare(b.title));
+    const tree = (nodes, parentPath) => `<ul>${nodes.map(n => {
+      const p = `${parentPath}/${n.title}`;
+      const its = listFor(p);
+      return `<li><b>${esc(n.title)}</b> <span class="sub">${n.categories && !its.length ? "" : `${its.length} item${its.length === 1 ? "" : "s"}`}</span>
+        ${its.length ? `<ul>${its.map(i => `<li>${esc(i.title)} <span class="sub">${esc(i.type)}</span></li>`).join("")}</ul>` : ""}
+        ${n.categories ? tree(n.categories, p) : ""}</li>`;
+    }).join("")}</ul>`;
+    const pageCount = [...plan.files.values()].reduce((n, ps) => n + ps.size, 0) - 1;
+    const ok = await dialog(`Preview: ${label(rootPath)}`, `
+      <p>${plan.files.size - 1} items across the pages (${pageCount} filings, since some items are used on more than one page).
+        ${managed ? "This replaces what's in this folder from the last sync." : ""}
+        Items keep any other folders they're in.</p>
+      <div class="preview">${tree(plan.categories, rootPath)}</div>`, "Save these folders");
+    if(!ok) return;
+
+    status("Saving…");
+    try {
+      await saveMap({ edit: ({ schema, files, extra }) => {
+        const s = structuredClone(schema);
+        const { node } = findNode(s, parent);
+        if(!node) throw new Error(`The folder “${label(parent)}” no longer exists.`);
+        const list = node.categories ||= [];
+        const at = list.findIndex(n => n.title === name);
+        const fresh = { title: name, categories: plan.categories };
+        at >= 0 ? list.splice(at, 1, fresh) : list.push(fresh);
+        for(const [id, ps] of files){
+          const keep = ps.filter(p => p !== rootPath && !p.startsWith(rootPath + "/"));
+          if(keep.length !== ps.length) files.set(id, keep);
+        }
+        for(const [id, ps] of plan.files) files.set(id, [...new Set([...(files.get(id) || []), ...ps])]);
+        extra.synced[rootPath] = { experienceId: exp.id, title: exp.title, at: Date.now() };
+        return s;
+      }});
+      S.expanded.add(parent);
+      S.expanded.add(rootPath);
+      S.folder = rootPath;
+      render();
+      status(`Synced ${exp.title} into ${label(rootPath)}.`, 3000);
+    } catch(e){ report("Couldn't save the folders", e.message, []); }
   }
 
   // ---------- Details ----------
