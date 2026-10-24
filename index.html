@@ -129,6 +129,7 @@ dialog .preview li{ margin:2px 0; }
       <input type="search" id="q" placeholder="Search titles, owners, tags…">
       <select id="typeFilter"><option value="">All types</option></select>
       <select id="ownerFilter"><option value="">All owners</option></select>
+      <label class="sub" title="Backups are hidden everywhere except their own folder"><input type="checkbox" id="showBackups"> Show backups</label>
     </div>
     <div class="crumb" id="crumb"></div>
     <div class="selbar" id="selbar">
@@ -194,7 +195,7 @@ require([
   const S = {
     token: null, user: null, org: null, map: null, canFile: false, isAdmin: false,
     schema: [], items: new Map(), cats: new Map(),
-    folder: "__all", selection: new Set(), current: null, expanded: new Set(),
+    folder: "__all", selection: new Set(), current: null, expanded: new Set(), collapsed: new Set(),
     shown: PAGE, folderNames: new Map()
   };
 
@@ -300,6 +301,52 @@ require([
     fillFilters();
     render();
     status(`Loaded ${S.items.size} items.`, 2500);
+    fileNewBackups();
+  }
+
+  // ---------- Backups ----------
+
+  // Backups are the nightly backup_<id>_<date> exports, *_TEMP_FOR_BACKUP_* files and similar, plus
+  // downloadable files sitting in an owner's Backup(s) folder. Live layers, forms and maps that happen
+  // to be in a Backups folder are not backups.
+  const BACKUP_RE = /back\s*-?\s*up|\bbak\b|_bak|\bbkp?\b/i;
+  const FILE_TYPES = ["File Geodatabase", "Service Definition", "CSV", "Shapefile", "Microsoft Excel", "GeoJson", "Code Attachment", "Image", "PDF", "Microsoft Word", "KML"];
+  const backupsPath = () => `/${S.schema[0]?.title}/Backups`;
+  const isBackup = i => BACKUP_RE.test(i.title) || (i.tags || []).some(t => BACKUP_RE.test(t))
+    || (FILE_TYPES.includes(i.type) && BACKUP_RE.test(S.folderNames.get(i.owner)?.get(i.ownerFolder) || ""));
+  const hiddenBackup = id => !$("showBackups").checked && folderOf(id).includes(backupsPath())
+    && S.folder !== backupsPath() && !S.folder.startsWith(backupsPath() + "/");
+
+  async function loadFolderNames(){
+    const owners = [...new Set([...S.items.values()].map(i => i.owner))].filter(o => !S.folderNames.has(o));
+    await Promise.all(owners.map(async o => {
+      try {
+        const r = await rest(`content/users/${o}`, { num: 1 });
+        S.folderNames.set(o, new Map((r.folders || []).map(f => [f.id, f.title])));
+      } catch { S.folderNames.set(o, new Map()); }
+    }));
+  }
+
+  // Files any backups that aren't in a folder yet into Backups (making the folder if needed),
+  // so new nightly exports never pile up in "Not filed yet".
+  async function fileNewBackups(){
+    if(!S.canFile || !S.schema.length) return;
+    try {
+      await loadFolderNames();
+      const ids = [...S.items.values()].filter(i => !isFiled(i.id) && isBackup(i)).map(i => i.id);
+      if(!ids.length) return;
+      const path = backupsPath();
+      await saveMap({
+        files: new Map(ids.map(id => [id, [path]])),
+        edit: ({ schema }) => {
+          const s = structuredClone(schema);
+          if(!(s[0].categories ||= []).some(n => n.title === "Backups")) s[0].categories.push({ title: "Backups" });
+          return s;
+        }
+      });
+      render();
+      status(`Filed ${ids.length} backup${ids.length === 1 ? "" : "s"} into Backups.`, 3000);
+    } catch(e){ console.warn("Couldn't file backups", e); }
   }
 
   // The folder map is one item holding { schema, files: { itemId: [paths] } }, shared with the org so
@@ -379,7 +426,7 @@ require([
     const folders = flatten();
 
     let html = `<div class="tree-head">Folders</div>
-      ${node("__all", "All items", S.items.size, 0)}
+      ${node("__all", "All items", [...S.items.keys()].filter(id => !hiddenBackup(id)).length, 0)}
       ${node("__unfiled", "Not filed yet", unfiled, 0)}
       <div class="tree-sep"></div>`;
     for(const f of folders){
@@ -400,7 +447,8 @@ require([
   }
 
   // A folder is open when expanded, and stays open while it or anything inside it is selected.
-  const isOpen = path => S.expanded.has(path) || S.folder === path || S.folder.startsWith(path + "/");
+  // A folder you've folded up stays folded, even while you're inside it.
+  const isOpen = path => !S.collapsed.has(path) && (S.expanded.has(path) || S.folder === path || S.folder.startsWith(path + "/"));
 
   // Top-level folders always show; deeper ones only when every folder above them (below the root) is open.
   function visible(path){
@@ -420,7 +468,11 @@ require([
 
   $("tree").addEventListener("click", e => {
     const twist = e.target.closest("[data-twist]")?.dataset.twist;
-    if(twist){ S.expanded.has(twist) ? S.expanded.delete(twist) : S.expanded.add(twist); return renderTree(); }
+    if(twist){
+      if(isOpen(twist)){ S.expanded.delete(twist); S.collapsed.add(twist); }
+      else { S.collapsed.delete(twist); S.expanded.add(twist); }
+      return renderTree();
+    }
     const act = e.target.closest("[data-act]")?.dataset.act;
     if(act) return folderAction(act);
     const f = e.target.closest("[data-folder]")?.dataset.folder;
@@ -449,6 +501,7 @@ require([
     const type = $("typeFilter").value, owner = $("ownerFilter").value;
     return [...S.items.values()].filter(i => {
       if(S.folder === "__unfiled" && isFiled(i.id)) return false;
+      if(hiddenBackup(i.id)) return false;
       if(S.folder.startsWith("/") && !folderOf(i.id).includes(S.folder)) return false;
       if(type && i.type !== type) return false;
       if(owner && i.owner !== owner) return false;
@@ -508,6 +561,7 @@ require([
   });
 
   for(const id of ["q", "typeFilter", "ownerFilter"]) $(id).addEventListener("input", () => { S.shown = PAGE; renderList(); });
+  $("showBackups").addEventListener("change", () => { S.shown = PAGE; render(); });
 
   function fillFilters(){
     const opts = (sel, values, all) => {
