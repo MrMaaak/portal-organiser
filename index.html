@@ -329,6 +329,9 @@ require([
   const AUTO_FOLDERS = [
     { title: "Feature services", test: i => i.type === "Feature Service", additive: true },
     { title: "Web maps", test: i => i.type === "Web Map", additive: true },
+    // "Application" items are registered apps: the sign-in credentials FME, Celium, the bulkeditor
+    // and this organiser connect with.
+    { title: "Applications", test: i => i.type === "Application", additive: true },
     { title: "Service definitions", test: i => i.type === "Service Definition" },
     { title: "Map areas", test: i => i.type === "Map Area" },
     { title: "Notebooks", test: i => i.type === "Notebook" },
