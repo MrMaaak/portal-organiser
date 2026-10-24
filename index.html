@@ -708,7 +708,15 @@ require([
           if(paths.some(p => p === sel || p.startsWith(sel + "/")))
             moves.set(id, paths.map(p => p === sel || p.startsWith(sel + "/") ? newPath + p.slice(sel.length) : p));
         }
-        await saveSchema(schema, moves);
+        // Synced folders in or under it move too, so Sync from experience still recognises them.
+        await saveMap({ schema, files: moves, edit: ({ schema: s, extra }) => {
+          for(const [p, info] of Object.entries(extra.synced)){
+            if(p !== sel && !p.startsWith(sel + "/")) continue;
+            delete extra.synced[p];
+            extra.synced[newPath + p.slice(sel.length)] = info;
+          }
+          return s;
+        }});
         S.folder = newPath;
       }
       // A synced folder can always be deleted; it can be made again with Sync from experience.
