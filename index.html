@@ -459,14 +459,21 @@ require([
   }
   const folderOf = id => S.cats.get(id) || [];
   const isFiled = id => folderOf(id).length > 0;
+  const inFolder = (id, path) => folderOf(id).some(p => p === path || p.startsWith(path + "/"));
   const label = path => path.split("/").slice(2).join(" › ") || path.split("/")[1];
 
   function render(){ renderTree(); renderList(); renderSelbar(); }
 
   function renderTree(){
-    const counts = new Map();
-    // Count only items this person can see; the map also keeps entries for items hidden from them.
-    for(const [id, paths] of S.cats) if(S.items.has(id)) for(const p of paths) counts.set(p, (counts.get(p) || 0) + 1);
+    // Each folder counts everything in it and its subfolders, each item once even if it's in several
+    // subfolders. Only items this person can see count; the map also keeps entries for hidden ones.
+    const inside = new Map();
+    for(const [id, paths] of S.cats){
+      if(!S.items.has(id)) continue;
+      for(const p of paths) for(let q = p; q.lastIndexOf("/") > 0; q = q.slice(0, q.lastIndexOf("/")))
+        (inside.get(q) || inside.set(q, new Set()).get(q)).add(id);
+    }
+    const counts = new Map([...inside].map(([p, ids]) => [p, ids.size]));
     const unfiled = [...S.items.keys()].filter(id => !isFiled(id)).length;
     const folders = flatten();
 
@@ -547,7 +554,7 @@ require([
     return [...S.items.values()].filter(i => {
       if(S.folder === "__unfiled" && isFiled(i.id)) return false;
       if(hiddenBackup(i.id)) return false;
-      if(S.folder.startsWith("/") && !folderOf(i.id).includes(S.folder)) return false;
+      if(S.folder.startsWith("/") && !inFolder(i.id, S.folder)) return false;
       if(type && i.type !== type) return false;
       if(owner && i.owner !== owner) return false;
       if(q && !`${i.title} ${i.owner} ${i.type} ${(i.tags || []).join(" ")} ${i.snippet || ""}`.toLowerCase().includes(q)) return false;
@@ -649,7 +656,9 @@ require([
   }
 
   async function unfile(ids){
-    const map = new Map(ids.filter(id => isFiled(id)).map(id => [id, S.folder.startsWith("/") ? folderOf(id).filter(p => p !== S.folder) : []]));
+    // From a folder view this takes items out of that folder and its subfolders; elsewhere, out of every folder.
+    const map = new Map(ids.filter(id => isFiled(id)).map(id => [id, S.folder.startsWith("/")
+      ? folderOf(id).filter(p => p !== S.folder && !p.startsWith(S.folder + "/")) : []]));
     try { await setCategories(map); status(`${map.size} removed from ${S.folder.startsWith("/") ? label(S.folder) : "their folders"}.`, 3000); }
     catch(e){ report("Couldn't save the folders", e.message, []); }
     S.selection.clear();
